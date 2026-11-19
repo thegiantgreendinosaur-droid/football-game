@@ -60,6 +60,11 @@ export class MatchHUD {
   private powerRowEl!: HTMLElement;
   private powerFillEl!: HTMLElement;
 
+  // Contextual key hint refs
+  private keyHintEl!: HTMLElement;
+  private ctxSpaceLabelEl!: HTMLElement;
+  private ctxELabelEl!: HTMLElement;
+
   // Center banner refs
   private bannerEl!: HTMLElement;
   private bannerTagEl!: HTMLElement;
@@ -93,6 +98,7 @@ export class MatchHUD {
   private lastStaminaPct = -1;
   private lastStaminaTier = '';
   private lastShotPct = -1;
+  private lastHasPossession: boolean | null = null;
   private lastBannerKey = '';
   private lastPhase: MatchPhase | null = null;
   private lastFulltimeKey = '';
@@ -120,6 +126,7 @@ export class MatchHUD {
     this.updateScoreboard(snapshot);
     this.updateCameraButton(cameraPreset);
     this.updateControlledPlayer(snapshot);
+    this.updateContextualControls(snapshot);
     this.updateBanner(snapshot);
     this.updateModals(snapshot);
   }
@@ -189,19 +196,15 @@ export class MatchHUD {
         </div>
       </div>
 
-      <!-- Bottom-Right Subtle Controls Reminder -->
-      <div class="hud-key-hint" aria-hidden="true">
-        <span><b>WASD</b> Move</span>
+      <!-- Bottom-Right Contextual Controls Reminder -->
+      <div class="hud-key-hint no-possession" data-ref="key-hint" aria-live="polite">
+        <span class="hud-key-item"><b>WASD</b> Move</span>
         <span class="hud-key-div">|</span>
-        <span><b>SHIFT</b> Sprint</span>
+        <span class="hud-key-item"><b>SHIFT</b> Sprint</span>
         <span class="hud-key-div">|</span>
-        <span><b>SPACE</b> Pass</span>
+        <span class="hud-key-item hud-key-item--ctx"><b>SPACE</b> <span class="hud-key-action" data-ref="ctx-space-label">TACKLE</span></span>
         <span class="hud-key-div">|</span>
-        <span><b>J</b> Shoot</span>
-        <span class="hud-key-div">|</span>
-        <span><b>E</b> Tackle</span>
-        <span class="hud-key-div">|</span>
-        <span><b>Q</b> Switch</span>
+        <span class="hud-key-item hud-key-item--ctx"><b>E</b> <span class="hud-key-action" data-ref="ctx-e-label">SWITCH</span></span>
       </div>
 
       <!-- Pause Modal -->
@@ -222,10 +225,8 @@ export class MatchHUD {
             <div class="hud-controls-ref__grid">
               <div><kbd>WASD</kbd> / <kbd>Arrows</kbd> Move</div>
               <div><kbd>Shift</kbd> Sprint</div>
-              <div><kbd>Space</kbd> Pass / Through</div>
-              <div><kbd>J</kbd> Hold &amp; Release Shoot</div>
-              <div><kbd>E</kbd> Standing Tackle</div>
-              <div><kbd>Q</kbd> Switch Player</div>
+              <div><kbd>Space</kbd> Shoot (with ball) / Tackle (without ball)</div>
+              <div><kbd>E</kbd> Pass (with ball) / Switch (without ball)</div>
               <div><kbd>C</kbd> Cycle Camera</div>
               <div><kbd>Esc</kbd> Pause / Resume</div>
             </div>
@@ -290,6 +291,10 @@ export class MatchHUD {
     this.staminaFillEl = q('[data-ref="stamina-fill"]');
     this.powerRowEl = q('[data-ref="power-row"]');
     this.powerFillEl = q('[data-ref="power-fill"]');
+
+    this.keyHintEl = q('[data-ref="key-hint"]');
+    this.ctxSpaceLabelEl = q('[data-ref="ctx-space-label"]');
+    this.ctxELabelEl = q('[data-ref="ctx-e-label"]');
 
     this.bannerEl = q('[data-ref="banner"]');
     this.bannerTagEl = q('[data-ref="banner-tag"]');
@@ -431,6 +436,23 @@ export class MatchHUD {
       const powerZone = shotPct < 45 ? 'low' : shotPct < 78 ? 'mid' : 'high';
       this.powerFillEl.dataset.zone = powerZone;
     }
+  }
+
+  private updateContextualControls(snapshot: MatchSnapshot): void {
+    const controlled = snapshot.players.find(
+      (p) => p.id === snapshot.controlledPlayerId
+    );
+    const hasPossession = Boolean(
+      controlled && controlled.hasBall && snapshot.ball.ownerId === controlled.id
+    );
+
+    if (hasPossession === this.lastHasPossession) return;
+    this.lastHasPossession = hasPossession;
+
+    this.keyHintEl.classList.toggle('has-possession', hasPossession);
+    this.keyHintEl.classList.toggle('no-possession', !hasPossession);
+    this.ctxSpaceLabelEl.textContent = hasPossession ? 'SHOOT' : 'TACKLE';
+    this.ctxELabelEl.textContent = hasPossession ? 'PASS' : 'SWITCH';
   }
 
   private updateBanner(snapshot: MatchSnapshot): void {

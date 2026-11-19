@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import type { FootballerProfile, KitTheme } from '../types/game';
 import { createFootballerRig, disposeCharacterRig } from './characterBuilder';
 
-const PORTRAIT_WIDTH = 256;
-const PORTRAIT_HEIGHT = 280;
+const PORTRAIT_WIDTH = 300;
+const PORTRAIT_HEIGHT = 320;
 
 /**
  * Renders studio-lit 3D head-and-shoulders portraits for a list of footballers
@@ -37,31 +37,36 @@ export function renderPlayerPortraits(
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.12;
+    renderer.toneMappingExposure = 1.14;
 
     const scene = new THREE.Scene();
 
-    // Studio portrait three-point + hemisphere lighting
-    const hemiLight = new THREE.HemisphereLight(0xf8fafc, 0x334155, 0.95);
+    // Soft studio hemisphere fill for balanced ambient shading across light & dark cards
+    const hemiLight = new THREE.HemisphereLight(0xf8fafc, 0x334155, 1.05);
     scene.add(hemiLight);
 
-    // Warm key light from front-left-above for sculptural facial highlights
-    const keyLight = new THREE.DirectionalLight(0xfff1dc, 2.2);
-    keyLight.position.set(2.2, 2.8, 3.2);
+    // Warm front-left key light for sculptural facial illumination
+    const keyLight = new THREE.DirectionalLight(0xfff5e4, 2.25);
+    keyLight.position.set(-2.1, 2.7, 3.2);
     scene.add(keyLight);
 
-    // Cool rim light from behind-right to outline hair silhouettes & shoulders
-    const rimLight = new THREE.DirectionalLight(0x7dd3fc, 1.65);
-    rimLight.position.set(-2.4, 2.2, -2.5);
-    scene.add(rimLight);
+    // Champagne-gold back-right rim light to separate dark hair & kits from obsidian cards
+    const goldRimLight = new THREE.DirectionalLight(0xfde68a, 1.85);
+    goldRimLight.position.set(2.4, 2.35, -2.35);
+    scene.add(goldRimLight);
 
-    // Soft front-right bounce fill to keep shadows clean and legible
-    const fillLight = new THREE.DirectionalLight(0xe2e8f0, 0.55);
-    fillLight.position.set(-1.9, 1.4, 2.5);
+    // Subtle cool back-left edge rim for crisp shoulder & hair silhouette separation
+    const coolRimLight = new THREE.DirectionalLight(0xbae6fd, 1.1);
+    coolRimLight.position.set(-2.35, 2.05, -2.4);
+    scene.add(coolRimLight);
+
+    // Gentle front-right bounce fill to keep shadow side clean without flattening depth
+    const fillLight = new THREE.DirectionalLight(0xe2e8f0, 0.5);
+    fillLight.position.set(1.9, 1.4, 2.5);
     scene.add(fillLight);
 
     const camera = new THREE.PerspectiveCamera(
-      27,
+      25,
       PORTRAIT_WIDTH / PORTRAIT_HEIGHT,
       0.1,
       20
@@ -87,16 +92,20 @@ export function renderPlayerPortraits(
         rig.leftElbow.rotation.x = -0.25;
         rig.rightElbow.rotation.x = -0.25;
 
-        // Frame tightly on upper torso, collar, shoulders, and head regardless of player height
+        // Frame consistently across all 18 heights (170cm–200cm) with clean headroom & balanced shoulders
         const h = rig.heightScale;
+        const { hairStyle, build } = profile.appearance;
         const extraHeadroom =
-          profile.appearance.hairStyle === 'curly_voluminous' ||
-          profile.appearance.hairStyle === 'topknot_bun'
-            ? 0.03
-            : 0;
-        const lookY = (1.585 + extraHeadroom) * h;
-        const camY = (1.64 + extraHeadroom) * h;
-        const camZ = (1.46 + extraHeadroom * 1.4) * h;
+          hairStyle === 'curly_voluminous' || hairStyle === 'topknot_bun'
+            ? 0.028
+            : hairStyle === 'curly_highlighted' || hairStyle === 'slick_undercut'
+              ? 0.016
+              : 0;
+        const buildPullback = build === 'towering' || build === 'stocky' ? 0.03 : 0;
+
+        const lookY = (1.56 + extraHeadroom) * h;
+        const camY = (1.62 + extraHeadroom) * h;
+        const camZ = (1.62 + extraHeadroom * 1.3 + buildPullback) * h;
 
         camera.position.set(0, camY, camZ);
         camera.lookAt(0, lookY, 0);

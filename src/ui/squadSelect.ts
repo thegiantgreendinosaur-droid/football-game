@@ -196,13 +196,9 @@ export class SquadSelectUI {
         <span class="squad-key-sep" aria-hidden="true">&bull;</span>
         <span class="squad-key-item"><kbd>Shift</kbd> Sprint</span>
         <span class="squad-key-sep" aria-hidden="true">&bull;</span>
-        <span class="squad-key-item"><kbd>Space</kbd> Pass</span>
+        <span class="squad-key-item"><kbd>Space</kbd> Shoot / Tackle</span>
         <span class="squad-key-sep" aria-hidden="true">&bull;</span>
-        <span class="squad-key-item"><kbd>J</kbd> Shoot</span>
-        <span class="squad-key-sep" aria-hidden="true">&bull;</span>
-        <span class="squad-key-item"><kbd>E</kbd> Tackle</span>
-        <span class="squad-key-sep" aria-hidden="true">&bull;</span>
-        <span class="squad-key-item"><kbd>Q</kbd> Switch</span>
+        <span class="squad-key-item"><kbd>E</kbd> Pass / Switch</span>
         <span class="squad-key-sep" aria-hidden="true">&bull;</span>
         <span class="squad-key-item"><kbd>C</kbd> Camera</span>
         <span class="squad-key-sep" aria-hidden="true">&bull;</span>

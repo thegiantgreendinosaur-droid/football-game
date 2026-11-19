@@ -13,12 +13,10 @@ export interface InputCallbacks {
  */
 export class InputManager {
   private keys = new Set<string>();
-  private passJustPressed = false;
-  private passJustReleased = false;
-  private shootJustPressed = false;
-  private shootJustReleased = false;
-  private tackleJustPressed = false;
-  private switchJustPressed = false;
+  private spaceJustPressed = false;
+  private spaceJustReleased = false;
+  private eJustPressed = false;
+  private eJustReleased = false;
   private enabled = false;
   private callbacks: InputCallbacks;
 
@@ -38,12 +36,10 @@ export class InputManager {
 
   public clearState(): void {
     this.keys.clear();
-    this.passJustPressed = false;
-    this.passJustReleased = false;
-    this.shootJustPressed = false;
-    this.shootJustReleased = false;
-    this.tackleJustPressed = false;
-    this.switchJustPressed = false;
+    this.spaceJustPressed = false;
+    this.spaceJustReleased = false;
+    this.eJustPressed = false;
+    this.eJustReleased = false;
   }
 
   public consumeInput(): ControlInput {
@@ -64,23 +60,19 @@ export class InputManager {
       moveX,
       moveZ,
       sprint: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'),
-      passHeld: this.keys.has('Space'),
-      passJustPressed: this.passJustPressed,
-      passJustReleased: this.passJustReleased,
-      shootHeld: this.keys.has('KeyJ'),
-      shootJustPressed: this.shootJustPressed,
-      shootJustReleased: this.shootJustReleased,
-      tackleJustPressed: this.tackleJustPressed,
-      switchJustPressed: this.switchJustPressed,
+      spaceHeld: this.keys.has('Space'),
+      spaceJustPressed: this.spaceJustPressed,
+      spaceJustReleased: this.spaceJustReleased,
+      eHeld: this.keys.has('KeyE'),
+      eJustPressed: this.eJustPressed,
+      eJustReleased: this.eJustReleased,
     };
 
     // Reset edge-triggered flags after consumption
-    this.passJustPressed = false;
-    this.passJustReleased = false;
-    this.shootJustPressed = false;
-    this.shootJustReleased = false;
-    this.tackleJustPressed = false;
-    this.switchJustPressed = false;
+    this.spaceJustPressed = false;
+    this.spaceJustReleased = false;
+    this.eJustPressed = false;
+    this.eJustReleased = false;
 
     return input;
   }
@@ -121,11 +113,9 @@ export class InputManager {
     const wasDown = this.keys.has(e.code);
     this.keys.add(e.code);
 
-    if (!wasDown) {
-      if (e.code === 'Space') this.passJustPressed = true;
-      if (e.code === 'KeyJ') this.shootJustPressed = true;
-      if (e.code === 'KeyE') this.tackleJustPressed = true;
-      if (e.code === 'KeyQ') this.switchJustPressed = true;
+    if (!wasDown && !e.repeat) {
+      if (e.code === 'Space') this.spaceJustPressed = true;
+      if (e.code === 'KeyE') this.eJustPressed = true;
     }
   };
 
@@ -134,8 +124,8 @@ export class InputManager {
     this.keys.delete(e.code);
 
     if (wasDown && this.enabled) {
-      if (e.code === 'Space') this.passJustReleased = true;
-      if (e.code === 'KeyJ') this.shootJustReleased = true;
+      if (e.code === 'Space') this.spaceJustReleased = true;
+      if (e.code === 'KeyE') this.eJustReleased = true;
     }
   };
 

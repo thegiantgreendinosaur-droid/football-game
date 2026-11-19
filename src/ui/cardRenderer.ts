@@ -131,33 +131,92 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * Creates a crisp, non-scaling etched metallic inner shield hairline and subtle
+ * geometric filigree overlay that follows the exact chamfered shield silhouette.
+ */
+function createCardEtchSvg(compact: boolean): string {
+  if (compact) {
+    return `<svg class="player-card__etch" viewBox="0 0 100 112" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <polygon
+        points="11.6,2.8 88.4,2.8 96.6,8.4 96.6,95.4 50,108.8 3.4,95.4 3.4,8.4"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1"
+        vector-effect="non-scaling-stroke"
+      />
+      <path
+        d="M 38 2.8 L 50 7.2 L 62 2.8"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="0.9"
+        stroke-opacity="0.7"
+        vector-effect="non-scaling-stroke"
+      />
+    </svg>`;
+  }
+
+  return `<svg class="player-card__etch" viewBox="0 0 100 148" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+    <g stroke="currentColor" fill="none" vector-effect="non-scaling-stroke">
+      <polygon
+        points="11.4,3.1 88.6,3.1 96.7,9.4 96.7,126.5 50,144.3 3.3,126.5 3.3,9.4"
+        stroke-width="1"
+      />
+      <path d="M 37 3.1 L 50 8.2 L 63 3.1" stroke-width="0.95" stroke-opacity="0.75" />
+      <path d="M 3.3 56 L 50 16 L 96.7 56" stroke-width="0.8" stroke-opacity="0.22" />
+      <path d="M 14 78 L 50 42 L 86 78" stroke-width="0.75" stroke-opacity="0.16" />
+      <path d="M 36 135.5 L 50 141.2 L 64 135.5" stroke-width="0.9" stroke-opacity="0.55" />
+    </g>
+  </svg>`;
+}
+
+function createPortraitGlowNode(): HTMLElement {
+  const glow = document.createElement('div');
+  glow.className = 'player-card__portrait-glow';
+  glow.setAttribute('aria-hidden', 'true');
+  return glow;
+}
+
+function createPortraitImgNode(
+  wrap: HTMLElement,
+  profile: FootballerProfile,
+  portraitUrl: string
+): HTMLImageElement {
+  const img = document.createElement('img');
+  img.className = 'player-card__portrait';
+  img.src = portraitUrl;
+  img.alt = profile.name;
+  img.draggable = false;
+  img.addEventListener('error', () => {
+    wrap.innerHTML = '';
+    wrap.appendChild(createPortraitGlowNode());
+    wrap.insertAdjacentHTML('beforeend', createPortraitFallbackSvg(profile));
+  });
+  return img;
+}
+
+/**
  * Helper to create a portrait element (either <img> from the rendered 3D model or stylized fallback)
- * that can also be smoothly updated later via `updateCardPortrait`.
+ * backed by a subtle radial studio halo so the player integrates cleanly into the card surface.
  */
 export function buildPortraitNode(profile: FootballerProfile, portraitUrl: string | undefined): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'player-card__portrait-wrap';
   wrap.dataset.portraitFor = profile.id;
 
+  wrap.appendChild(createPortraitGlowNode());
+
   if (portraitUrl) {
-    const img = document.createElement('img');
-    img.className = 'player-card__portrait';
-    img.src = portraitUrl;
-    img.alt = profile.name;
-    img.draggable = false;
-    img.addEventListener('error', () => {
-      wrap.innerHTML = createPortraitFallbackSvg(profile);
-    });
-    wrap.appendChild(img);
+    wrap.appendChild(createPortraitImgNode(wrap, profile, portraitUrl));
   } else {
-    wrap.innerHTML = createPortraitFallbackSvg(profile);
+    wrap.insertAdjacentHTML('beforeend', createPortraitFallbackSvg(profile));
   }
 
   return wrap;
 }
 
 /**
- * Updates an existing portrait wrapper in-place once a 3D bust portrait finishes rendering.
+ * Updates an existing portrait wrapper in-place once a 3D bust portrait finishes rendering,
+ * preserving the radial studio halo layer behind the portrait.
  */
 export function patchPortraitWrap(
   wrap: HTMLElement,
@@ -165,6 +224,9 @@ export function patchPortraitWrap(
   portraitUrl: string | undefined
 ): void {
   if (!portraitUrl) return;
+  if (!wrap.querySelector('.player-card__portrait-glow')) {
+    wrap.prepend(createPortraitGlowNode());
+  }
   const existingImg = wrap.querySelector<HTMLImageElement>('img.player-card__portrait');
   if (existingImg) {
     if (existingImg.src !== portraitUrl) {
@@ -172,16 +234,11 @@ export function patchPortraitWrap(
     }
     return;
   }
-  const img = document.createElement('img');
-  img.className = 'player-card__portrait';
-  img.src = portraitUrl;
-  img.alt = profile.name;
-  img.draggable = false;
-  img.addEventListener('error', () => {
-    wrap.innerHTML = createPortraitFallbackSvg(profile);
-  });
-  wrap.innerHTML = '';
-  wrap.appendChild(img);
+  const fallback = wrap.querySelector('.player-card__fallback-svg');
+  if (fallback) {
+    fallback.remove();
+  }
+  wrap.appendChild(createPortraitImgNode(wrap, profile, portraitUrl));
 }
 
 export function createPlayerCardElement(
@@ -219,7 +276,10 @@ export function createPlayerCardElement(
   const shell = document.createElement('div');
   shell.className = 'player-card__shell';
 
-  // Inner metallic crest frame + hover sheen overlay
+  // Etched inner metallic hairline + subtle geometric filigree
+  shell.insertAdjacentHTML('beforeend', createCardEtchSvg(compact));
+
+  // Diagonal brushed-metal hover sheen sweep
   const sheen = document.createElement('div');
   sheen.className = 'player-card__sheen';
   sheen.setAttribute('aria-hidden', 'true');
@@ -228,14 +288,17 @@ export function createPlayerCardElement(
   // Top-right badge: slot label or IN SQUAD indicator
   if (slotLabel || selected) {
     const badge = document.createElement('span');
-    badge.className = selected && !compact ? 'player-card__badge player-card__badge--selected' : 'player-card__badge';
+    badge.className =
+      selected && !compact
+        ? 'player-card__badge player-card__badge--selected'
+        : 'player-card__badge';
     badge.textContent = slotLabel ?? 'IN SQUAD';
     shell.appendChild(badge);
   }
 
-  // Upper region: Rating/Pos/Flag on left + 3D portrait bust on center-right
-  const top = document.createElement('div');
-  top.className = 'player-card__top';
+  // REGION 1: Strictly bounded stage (left identity column + studio portrait)
+  const stage = document.createElement('div');
+  stage.className = 'player-card__stage';
 
   const meta = document.createElement('div');
   meta.className = 'player-card__meta';
@@ -247,14 +310,13 @@ export function createPlayerCardElement(
       ${createFlagSvg(profile)}
       <span class="player-card__cc">${escapeHtml(profile.countryCode)}</span>
     </span>
-    ${!compact ? `<span class="player-card__jersey">#${profile.number}</span>` : ''}
   `;
 
-  top.appendChild(meta);
-  top.appendChild(buildPortraitNode(profile, portraitUrl));
-  shell.appendChild(top);
+  stage.appendChild(meta);
+  stage.appendChild(buildPortraitNode(profile, portraitUrl));
+  shell.appendChild(stage);
 
-  // Divider hairline + tracked uppercase footballer name
+  // REGION 2: Dedicated full-width nameplate band (zero overlap with portrait or meta)
   const nameplate = document.createElement('div');
   nameplate.className = 'player-card__nameplate';
   const displayName = compact ? profile.shortName : profile.name;
@@ -273,7 +335,7 @@ export function createPlayerCardElement(
   `;
   shell.appendChild(nameplate);
 
-  // Full card 2x3 attribute grid (PAC/SHO/PAS | DRI/DEF/PHY)
+  // REGION 3: Full card 2x3 attribute grid (PAC/SHO/PAS | DRI/DEF/PHY)
   if (!compact) {
     const { pace, shooting, passing, dribbling, defending, physical } = profile.stats;
     const renderStat = (label: string, val: number): string => `

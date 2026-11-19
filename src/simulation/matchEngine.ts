@@ -146,8 +146,9 @@ export class MatchEngine {
   private autoSwitchCooldown = 0;
   private lastShotSpeedMs = 0;
   private lastTouchByTeam: Record<TeamSide, string | null> = { home: null, away: null };
-  private userChargingPass = false;
-  private userChargingShot = false;
+  private spacePressMode: 'none' | 'shoot' | 'tackle_consumed' = 'none';
+  private ePressMode: 'none' | 'pass' | 'switch_consumed' = 'none';
+  private postPassSwitchLockTimer = 0;
 
   constructor(
     homeSquad: FootballerProfile[],
@@ -192,8 +193,7 @@ export class MatchEngine {
     this.lastShotSpeedMs = 0;
     this.lastTouchByTeam = { home: null, away: null };
     this.autoSwitchCooldown = 0;
-    this.userChargingPass = false;
-    this.userChargingShot = false;
+    this.resetInputLatches();
     this.lastUserAimDir = { x: 1, z: 0 };
 
     resetAiRuntimeState(this.aiState);
@@ -211,6 +211,7 @@ export class MatchEngine {
       this.resetMatch();
       return;
     }
+    this.resetInputLatches();
     this.setupKickoffPositions(this.kickoffTeam);
     this.phase = 'kickoff_ready';
     this.previousPhase = 'kickoff_ready';
@@ -227,8 +228,18 @@ export class MatchEngine {
       ) {
         this.previousPhase = this.phase;
         this.phase = 'paused';
+        this.resetInputLatches();
+        const controlled = this.getControlledPlayer();
+        if (controlled) {
+          controlled.shotCharge = 0;
+          controlled.passCharge = 0;
+          if (controlled.actionState === 'shoot_charge') {
+            controlled.actionState = 'idle';
+          }
+        }
       }
     } else if (this.phase === 'paused') {
+      this.resetInputLatches();
       this.phase = this.previousPhase;
     }
   }
@@ -263,16 +274,23 @@ export class MatchEngine {
     const controlled = this.getControlledPlayer();
     if (!controlled) return null;
 
-    const nearLooseBall =
+    const controlledHasPossession =
+      controlled.hasBall && this.ball.ownerId === controlled.id;
+
+    if (controlledHasPossession) {
+      return findBestPassTarget(controlled, this.players, this.lastUserAimDir);
+    }
+
+    // Also keep pass target ring visible briefly while a Home pass is in flight to its receiver
+    if (
       this.ball.ownerId === null &&
-      Math.hypot(
-        this.ball.position.x - controlled.position.x,
-        this.ball.position.z - controlled.position.z
-      ) < 1.65;
+      this.ball.passTargetId &&
+      this.ball.passTargetId.startsWith('home_')
+    ) {
+      return this.findPlayerById(this.ball.passTargetId);
+    }
 
-    if (!controlled.hasBall && !nearLooseBall) return null;
-
-    return findBestPassTarget(controlled, this.players, this.lastUserAimDir);
+    return null;
   }
 
   public step(dt: number, input: ControlInput, cameraBasis: CameraBasis): SimEvent[] {
@@ -426,8 +444,7 @@ export class MatchEngine {
     if (this.half === 1 && this.matchSeconds >= MATCH.HALFTIME_MATCH_SECONDS) {
       this.matchSeconds = MATCH.HALFTIME_MATCH_SECONDS;
       this.clearAllPossession();
-      this.userChargingPass = false;
-      this.userChargingShot = false;
+      this.resetInputLatches();
       this.phase = 'halftime';
       this.phaseTimer = MATCH.HALFTIME_PAUSE_SECONDS;
       this.bannerText = 'HALF TIME';
@@ -439,8 +456,7 @@ export class MatchEngine {
     if (this.half === 2 && this.matchSeconds >= MATCH.FULLTIME_MATCH_SECONDS) {
       this.matchSeconds = MATCH.FULLTIME_MATCH_SECONDS;
       this.clearAllPossession();
-      this.userChargingPass = false;
-      this.userChargingShot = false;
+      this.resetInputLatches();
       this.phase = 'fulltime';
       this.phaseTimer = 0;
       this.bannerText = 'FULL TIME';
@@ -450,6 +466,9 @@ export class MatchEngine {
 
     if (this.autoSwitchCooldown > 0) {
       this.autoSwitchCooldown = Math.max(0, this.autoSwitchCooldown - dt);
+    }
+    if (this.postPassSwitchLockTimer > 0) {
+      this.postPassSwitchLockTimer = Math.max(0, this.postPassSwitchLockTimer - dt);
     }
 
     // Track possession statistics
@@ -479,11 +498,6 @@ export class MatchEngine {
       this.lastUserAimDir = { x: worldX * inv, z: worldZ * inv };
     }
 
-    // Manual Q-key switching
-    if (input.switchJustPressed) {
-      this.switchToBestHomePlayer(true);
-    }
-
     // Auto-switch on Home pass in flight or loose ball
     this.handleAutoSwitching();
 
@@ -498,14 +512,16 @@ export class MatchEngine {
       };
     }
 
-    // Handle controlled player actions (Pass, Shoot, Tackle)
+    // Handle controlled player contextual actions (SPACE = Shoot/Tackle, E = Pass/Switch)
     this.handleControlledPlayerActions(controlled, input, userMoveDir, dt, events);
+
+    const activeControlled = this.getControlledPlayer() ?? controlled;
 
     // Step AI for all non-controlled players
     const aiRes = stepAiController(
       this.players,
       this.ball,
-      controlled,
+      activeControlled,
       this.aiState,
       this.stats,
       events,
@@ -639,41 +655,50 @@ export class MatchEngine {
     dt: number,
     events: SimEvent[]
   ): void {
-    const canKickBall =
-      player.hasBall ||
-      (this.ball.ownerId === null &&
-        player.kickCooldown <= 0 &&
-        this.ball.position.y < 1.25 &&
-        Math.hypot(
-          this.ball.position.x - player.position.x,
-          this.ball.position.z - player.position.z
-        ) < 1.48);
+    const controlledHasPossession =
+      player.hasBall && this.ball.ownerId === player.id;
 
     const aimDir: Vec2 | null =
       Math.hypot(moveDir.x, moveDir.z) > 0.12 ? moveDir : null;
 
-    // 1. SHOOTING (Hold J to charge over 0.65s, release to shoot; supports pre-buffering before trap)
-    if (canKickBall && player.actionState !== 'stunned' && player.actionState !== 'tackle') {
+    // -------------------------------------------------------------------------
+    // 1. SPACE: Shoot (when controlled player possesses ball) / Tackle (otherwise)
+    // -------------------------------------------------------------------------
+    if (input.spaceJustPressed) {
       if (
-        input.shootJustPressed ||
-        (input.shootHeld && !this.userChargingShot && player.kickCooldown <= 0)
+        controlledHasPossession &&
+        player.actionState !== 'stunned' &&
+        player.actionState !== 'tackle' &&
+        player.kickCooldown <= 0
       ) {
-        this.userChargingShot = true;
-        this.userChargingPass = false;
+        this.spacePressMode = 'shoot';
+        // Cancel any active pass charge when committing to a shot
+        if (this.ePressMode === 'pass') {
+          this.ePressMode = 'switch_consumed';
+        }
         player.passCharge = 0;
-        player.shotCharge = Math.max(player.shotCharge, 0.1);
+        player.shotCharge = 0.1;
         player.actionState = 'shoot_charge';
+      } else if (!controlledHasPossession) {
+        this.spacePressMode = 'tackle_consumed';
+        executeTackle(player, this.ball, this.players, aimDir, this.stats, events);
+      } else {
+        // Controlled player has ball but cannot kick right now (stunned/tackle/cooldown):
+        // consume this press so it never leaks into a stray tackle.
+        this.spacePressMode = 'tackle_consumed';
       }
+    }
 
-      if (this.userChargingShot && input.shootHeld) {
-        player.shotCharge = clamp(player.shotCharge + dt / 0.65, 0, 1);
-        player.actionState = 'shoot_charge';
-      }
-
-      if (
-        (input.shootJustReleased || !input.shootHeld) &&
-        (this.userChargingShot || player.shotCharge > 0)
-      ) {
+    if (this.spacePressMode === 'shoot') {
+      const stillHasPossession = player.hasBall && this.ball.ownerId === player.id;
+      if (!stillHasPossession) {
+        // Dispossessed mid-windup -> cancel charge and latch consumed so release never fires a tackle
+        player.shotCharge = 0;
+        if (player.actionState === 'shoot_charge') {
+          player.actionState = 'idle';
+        }
+        this.spacePressMode = 'tackle_consumed';
+      } else if (input.spaceJustReleased || !input.spaceHeld) {
         const finalCharge = Math.max(0.18, player.shotCharge);
         this.lastShotSpeedMs = executeShot(
           player,
@@ -684,42 +709,59 @@ export class MatchEngine {
           events
         );
         this.lastTouchByTeam.home = player.id;
-        this.userChargingShot = false;
-        this.userChargingPass = false;
+        this.spacePressMode = 'none';
+        if (this.ePressMode === 'pass') {
+          this.ePressMode = 'switch_consumed';
+        }
+        player.passCharge = 0;
         return;
-      }
-    } else if (this.userChargingShot || player.shotCharge > 0) {
-      // Lost possession while charging -> cleanly cancel
-      this.userChargingShot = false;
-      player.shotCharge = 0;
-      if (player.actionState === 'shoot_charge') {
-        player.actionState = 'idle';
+      } else if (input.spaceHeld) {
+        if (!input.spaceJustPressed) {
+          player.shotCharge = clamp(player.shotCharge + dt / 0.65, 0, 1);
+        }
+        player.actionState = 'shoot_charge';
       }
     }
 
-    // 2. PASSING (Tap Space for crisp ground pass, hold for driven through-ball; supports pre-buffering)
-    if (
-      canKickBall &&
-      !this.userChargingShot &&
-      player.actionState !== 'stunned' &&
-      player.actionState !== 'tackle'
-    ) {
-      if (
-        input.passJustPressed ||
-        (input.passHeld && !this.userChargingPass && player.kickCooldown <= 0)
-      ) {
-        this.userChargingPass = true;
-        player.passCharge = Math.max(player.passCharge, 0.08);
+    if (this.spacePressMode === 'tackle_consumed') {
+      if (input.spaceJustReleased || !input.spaceHeld) {
+        this.spacePressMode = 'none';
       }
+    }
 
-      if (this.userChargingPass && input.passHeld) {
-        player.passCharge = clamp(player.passCharge + dt / 0.55, 0, 1);
-      }
+    // -------------------------------------------------------------------------
+    // 2. E: Pass (when controlled player possesses ball) / Switch Player (otherwise)
+    // -------------------------------------------------------------------------
+    const hasPossessionForE = player.hasBall && this.ball.ownerId === player.id;
 
+    if (input.eJustPressed) {
       if (
-        (input.passJustReleased || !input.passHeld) &&
-        (this.userChargingPass || player.passCharge > 0)
+        hasPossessionForE &&
+        this.spacePressMode !== 'shoot' &&
+        player.actionState !== 'stunned' &&
+        player.actionState !== 'tackle' &&
+        player.kickCooldown <= 0
       ) {
+        this.ePressMode = 'pass';
+        player.passCharge = 0.08;
+      } else if (!hasPossessionForE) {
+        this.ePressMode = 'switch_consumed';
+        if (this.postPassSwitchLockTimer <= 0) {
+          this.switchToBestHomePlayer(true, aimDir);
+        }
+      } else {
+        // Controlled player has ball but is charging a shot or locked:
+        // consume this press cleanly without switching or passing.
+        this.ePressMode = 'switch_consumed';
+      }
+    }
+
+    if (this.ePressMode === 'pass') {
+      const stillHasPossession = player.hasBall && this.ball.ownerId === player.id;
+      if (!stillHasPossession) {
+        player.passCharge = 0;
+        this.ePressMode = 'switch_consumed';
+      } else if (input.eJustReleased || !input.eHeld) {
         const finalCharge = clamp(player.passCharge, 0.08, 1);
         const receiver = executePass(
           player,
@@ -731,23 +773,26 @@ export class MatchEngine {
           events
         );
         this.lastTouchByTeam.home = player.id;
-        this.userChargingPass = false;
         player.passCharge = 0;
+        this.ePressMode = 'none';
+        this.postPassSwitchLockTimer = 0.22;
 
         // If user just cleared/passed with GK, immediately switch to receiver!
         if (player.role === 'GK' && receiver && receiver.team === 'home') {
           this.setControlledPlayer(receiver.id);
         }
         return;
+      } else if (input.eHeld) {
+        if (!input.eJustPressed) {
+          player.passCharge = clamp(player.passCharge + dt / 0.55, 0, 1);
+        }
       }
-    } else if (this.userChargingPass || player.passCharge > 0) {
-      this.userChargingPass = false;
-      player.passCharge = 0;
     }
 
-    // 3. TACKLING (E key when not carrying the ball)
-    if (input.tackleJustPressed && !player.hasBall) {
-      executeTackle(player, this.ball, this.players, aimDir, this.stats, events);
+    if (this.ePressMode === 'switch_consumed') {
+      if (input.eJustReleased || !input.eHeld) {
+        this.ePressMode = 'none';
+      }
     }
   }
 
@@ -819,38 +864,122 @@ export class MatchEngine {
     }
   }
 
-  private switchToBestHomePlayer(excludeCurrent: boolean): void {
-    const predX = clamp(this.ball.position.x + this.ball.velocity.x * 0.2, -31, 31);
-    const predZ = clamp(this.ball.position.z + this.ball.velocity.z * 0.2, -19, 19);
+  private switchToBestHomePlayer(manual: boolean, aimDir?: Vec2 | null): void {
+    const currentControlled = this.getControlledPlayer();
+    const leadX = clamp(
+      this.ball.position.x + this.ball.velocity.x * 0.28,
+      -PITCH.HALF_LENGTH,
+      PITCH.HALF_LENGTH
+    );
+    const leadZ = clamp(
+      this.ball.position.z + this.ball.velocity.z * 0.28,
+      -PITCH.HALF_WIDTH,
+      PITCH.HALF_WIDTH
+    );
 
-    let best: SimPlayerState | null = null;
-    let bestDist = Infinity;
+    const ballOwner = this.ball.ownerId ? this.findPlayerById(this.ball.ownerId) : null;
+    const isDefending =
+      (ballOwner !== null && ballOwner.team === 'away') ||
+      (ballOwner === null &&
+        (this.ball.lastTouchTeam === 'away' || this.ball.velocity.x < -2.0));
+
+    let aimUx = 0;
+    let aimUz = 0;
+    const hasAim =
+      aimDir !== undefined &&
+      aimDir !== null &&
+      Math.hypot(aimDir.x, aimDir.z) > 0.15;
+    if (hasAim && aimDir) {
+      const aLen = Math.hypot(aimDir.x, aimDir.z);
+      aimUx = aimDir.x / aLen;
+      aimUz = aimDir.z / aLen;
+    }
+
+    let bestOutfield: SimPlayerState | null = null;
+    let bestOutfieldScore = Infinity;
+    let closestOutfieldDist = Infinity;
+
+    let gkCandidate: SimPlayerState | null = null;
+    let gkDist = Infinity;
 
     for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
       if (p.team !== 'home') continue;
-      if (excludeCurrent && p.id === this.controlledPlayerId) continue;
+      if (manual && p.id === this.controlledPlayerId) continue;
 
-      // Exclude GK unless ball is deep in Home box and GK is clearly closest
-      if (p.role === 'GK' && this.ball.position.x > -23.0) continue;
+      const distToLead = Math.hypot(leadX - p.position.x, leadZ - p.position.z);
 
-      const d = Math.hypot(predX - p.position.x, predZ - p.position.z);
-      if (d < bestDist) {
-        bestDist = d;
-        best = p;
+      if (p.role === 'GK') {
+        // Never auto-switch back onto GK when returning control from GK
+        if (!manual && currentControlled?.role === 'GK') continue;
+        // Only consider GK when ball is inside Home penalty area (x < -21)
+        if (this.ball.position.x < -21.0) {
+          gkCandidate = p;
+          gkDist = distToLead;
+        }
+        continue;
+      }
+
+      if (distToLead < closestOutfieldDist) {
+        closestOutfieldDist = distToLead;
+      }
+
+      // Distance to predicted ball is the strongest factor (lower score = better)
+      let score = distToLead;
+
+      // Defensive goal-side preference (Home goal is at x = -32)
+      if (isDefending) {
+        if (p.position.x < leadX + 0.5) {
+          score -= 3.2;
+          const goalVecX = -PITCH.HALF_LENGTH - leadX;
+          const goalVecZ = 0 - leadZ;
+          const gLen = Math.hypot(goalVecX, goalVecZ) || 1;
+          const toPX = p.position.x - leadX;
+          const toPZ = p.position.z - leadZ;
+          const pLen = Math.hypot(toPX, toPZ) || 1;
+          const corridorDot = (goalVecX * toPX + goalVecZ * toPZ) / (gLen * pLen);
+          if (corridorDot > 0.3) {
+            score -= corridorDot * 1.4;
+          }
+        } else {
+          score += 1.6;
+        }
+      }
+
+      // Movement / input direction alignment bonus when holding WASD toward a teammate
+      if (hasAim && currentControlled) {
+        const toTmX = p.position.x - currentControlled.position.x;
+        const toTmZ = p.position.z - currentControlled.position.z;
+        const toTmDist = Math.hypot(toTmX, toTmZ);
+        if (toTmDist > 0.5) {
+          const alignDot = (toTmX / toTmDist) * aimUx + (toTmZ / toTmDist) * aimUz;
+          if (alignDot > 0.25) {
+            score -= alignDot * 3.8;
+          }
+        }
+      }
+
+      if (score < bestOutfieldScore) {
+        bestOutfieldScore = score;
+        bestOutfield = p;
       }
     }
 
-    if (best) {
-      this.setControlledPlayer(best.id);
-      this.autoSwitchCooldown = 0.5;
+    // Select GK only if ball is inside Home penalty area AND no outfielder is closer
+    const chosen =
+      gkCandidate && gkDist < closestOutfieldDist
+        ? gkCandidate
+        : bestOutfield;
+
+    if (chosen) {
+      this.setControlledPlayer(chosen.id);
+      this.autoSwitchCooldown = manual ? 0.65 : 0.5;
     }
   }
 
   private handleGoalScored(scoredBy: TeamSide, events: SimEvent[]): void {
     this.clearAllPossession();
-    this.userChargingPass = false;
-    this.userChargingShot = false;
+    this.resetInputLatches();
 
     if (scoredBy === 'home') {
       this.homeScore += 1;
@@ -930,8 +1059,7 @@ export class MatchEngine {
 
   private handleOutOfBounds(oob: OutOfBoundsInfo, events: SimEvent[]): void {
     this.clearAllPossession();
-    this.userChargingPass = false;
-    this.userChargingShot = false;
+    this.resetInputLatches();
 
     const lastTeam = this.ball.lastTouchTeam ?? 'home';
     const otherTeam: TeamSide = lastTeam === 'home' ? 'away' : 'home';
@@ -1171,8 +1299,7 @@ export class MatchEngine {
     resetBall(this.ball, 0, BALL.RADIUS, 0);
     this.aiState.restartTakerId = null;
     this.aiState.restartAutoPassTimer = 0;
-    this.userChargingPass = false;
-    this.userChargingShot = false;
+    this.resetInputLatches();
 
     for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
@@ -1215,6 +1342,12 @@ export class MatchEngine {
     this.setControlledPlayer('home_4');
   }
 
+  private resetInputLatches(): void {
+    this.spacePressMode = 'none';
+    this.ePressMode = 'none';
+    this.postPassSwitchLockTimer = 0;
+  }
+
   private clearAllPossession(): void {
     this.ball.ownerId = null;
     this.ball.passTargetId = null;
@@ -1226,6 +1359,7 @@ export class MatchEngine {
   }
 
   private setControlledPlayer(playerId: string): void {
+    const changed = this.controlledPlayerId !== playerId;
     this.controlledPlayerId = playerId;
     for (let i = 0; i < this.players.length; i++) {
       const p = this.players[i];
@@ -1239,8 +1373,15 @@ export class MatchEngine {
       }
       p.isControlled = isTarget;
     }
-    this.userChargingPass = false;
-    this.userChargingShot = false;
+    if (changed) {
+      // If we switched players mid-charge, consume the held press so it never leaks into the new player
+      if (this.spacePressMode === 'shoot') {
+        this.spacePressMode = 'tackle_consumed';
+      }
+      if (this.ePressMode === 'pass') {
+        this.ePressMode = 'switch_consumed';
+      }
+    }
   }
 
   private findPlayerById(id: string): SimPlayerState | null {

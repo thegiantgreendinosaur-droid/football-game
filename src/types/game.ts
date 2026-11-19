@@ -198,17 +198,15 @@ export interface SimEvent {
 }
 
 export interface ControlInput {
-  moveX: number;           // -1..1 screen right/left
-  moveZ: number;           // -1..1 screen down/up (W = -1, S = +1)
+  moveX: number;               // -1..1 screen right/left
+  moveZ: number;               // -1..1 screen down/up (W = -1, S = +1)
   sprint: boolean;
-  passHeld: boolean;
-  passJustPressed: boolean;
-  passJustReleased: boolean;
-  shootHeld: boolean;
-  shootJustPressed: boolean;
-  shootJustReleased: boolean;
-  tackleJustPressed: boolean;
-  switchJustPressed: boolean;
+  spaceHeld: boolean;          // SPACE: Shoot (with ball) / Tackle (without ball)
+  spaceJustPressed: boolean;
+  spaceJustReleased: boolean;
+  eHeld: boolean;              // E: Pass (with ball) / Switch Player (without ball)
+  eJustPressed: boolean;
+  eJustReleased: boolean;
 }
 
 export type CameraPreset = 'broadcast' | 'wide' | 'dynamic_close';
